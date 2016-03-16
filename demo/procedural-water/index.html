@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>TNM084 Project</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				color: #000;
+				font-family:Monospace;
+				font-size:13px;
+				text-align:center;
+				font-weight: bold;
+
+				background-color: #fff;
+				margin: 0px;
+				overflow: hidden;
+			}
+
+			#info {
+				color:#000;
+				position: absolute;
+				top: 0px; width: 100%;
+				padding: 5px;
+			}
+
+			a {
+				color: red;
+			}
+		</style>
+
+		<script type="text/javascript" src="js/dat.gui.js"></script>
+
+		<!-- GUI -->
+		<script type="text/javascript">
+		GuiContent = function() {
+			this.depth = 1.0;
+			this.waterHue = 230.0 / 360.0;
+			this.displacementScale = 1.0;
+			this.vertexFrequencies = 3;
+			this.fragmentFrequencies = 2;
+		};
+
+		var gui_content;
+
+		window.onload = function() {
+			gui_content = new GuiContent();
+			var gui = new dat.GUI();
+			gui.width = 330;
+			gui.close();
+			gui.add(gui_content, 'depth', 1, 10);
+			gui.add(gui_content, 'displacementScale', 0, 2.5);
+			gui.add(gui_content, 'vertexFrequencies', 0, 5);
+			gui.add(gui_content, 'fragmentFrequencies', 0, 5);
+		};
+		</script>
+		
+	</head>
+
+	<body>
+		<div id="container"></div>
+
+		<!-- Shaders -->
+		<script type="x-shader/x-vertex" id="vertexshader">
+			//#extension GL_OES_standard_derivatives: enable
+			
+			/* ============================================ *
+			*              HERE COMES THE NOISE             *
+			* source: https://github.com/ashima/webgl-noise *
+			* ============================================= */
+
+			vec3 mod289(vec3 x) {
+				return x - floor(x * (1.0 / 289.0)) * 289.0;
+			}
+			vec4 mod289(vec4 x) {
+				return x - floor(x * (1.0 / 289.0)) * 289.0;
+			}
+			vec4 permute(vec4 x) {
+				return mod289(((x*34.0)+1.0)*x);
+			}
+			vec4 taylorInvSqrt(vec4 r)
+			{
+				return 1.79284291400159 - 0.85373472095314 * r;
+			}
+			float snoise(vec3 v)
+			{ 
+				const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
+				const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
+				// First corner
+				vec3 i  = floor(v + dot(v, C.yyy) );
+				vec3 x0 =   v - i + dot(i, C.xxx) ;
+				// Other corners
+				vec3 g = step(x0.yzx, x0.xyz);
+				vec3 l = 1.0 - g;
+				vec3 i1 = min( g.xyz, l.zxy );
+				vec3 i2 = max( g.xyz, l.zxy );
+				//   x0 = x0 - 0.0 + 0.0 * C.xxx;
+				//   x1 = x0 - i1  + 1.0 * C.xxx;
+				//   x2 = x0 - i2  + 2.0 * C.xxx;
+				//   x3 = x0 - 1.0 + 3.0 * C.xxx;
+				vec3 x1 = x0 - i1 + C.xxx;
+				vec3 x2 = x0 - i2 + C.yyy; // 2.0*C.x = 1/3 = C.y
+				vec3 x3 = x0 - D.yyy;      // -1.0+3.0*C.x = -0.5 = -D.y
+				// Permutations
+				i = mod289(i); 
+				vec4 p = permute( permute( permute( 
+				         i.z + vec4(0.0, i1.z, i2.z, 1.0 ))
+				       + i.y + vec4(0.0, i1.y, i2.y, 1.0 )) 
+				       + i.x + vec4(0.0, i1.x, i2.x, 1.0 ));
+				// Gradients: 7x7 points over a square, mapped onto an octahedron.
+				// The ring size 17*17 = 289 is close to a multiple of 49 (49*6 = 294)
+				float n_ = 0.142857142857; // 1.0/7.0
+				vec3  ns = n_ * D.wyz - D.xzx;
+				vec4 j = p - 49.0 * floor(p * ns.z * ns.z);  //  mod(p,7*7)
+				vec4 x_ = floor(j * ns.z);
+				vec4 y_ = floor(j - 7.0 * x_ );    // mod(j,N)
+				vec4 x = x_ *ns.x + ns.yyyy;
+				vec4 y = y_ *ns.x + ns.yyyy;
+				vec4 h = 1.0 - abs(x) - abs(y);
+				vec4 b0 = vec4( x.xy, y.xy );
+				vec4 b1 = vec4( x.zw, y.zw );
+				//vec4 s0 = vec4(lessThan(b0,0.0))*2.0 - 1.0;
+				//vec4 s1 = vec4(lessThan(b1,0.0))*2.0 - 1.0;
+				vec4 s0 = floor(b0)*2.0 + 1.0;
+				vec4 s1 = floor(b1)*2.0 + 1.0;
+				vec4 sh = -step(h, vec4(0.0));
+				vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy ;
+				vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww ;
+				vec3 p0 = vec3(a0.xy,h.x);
+				vec3 p1 = vec3(a0.zw,h.y);
+				vec3 p2 = vec3(a1.xy,h.z);
+				vec3 p3 = vec3(a1.zw,h.w);
+				//Normalise gradients
+				vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
+				p0 *= norm.x;
+				p1 *= norm.y;
+				p2 *= norm.z;
+				p3 *= norm.w;
+				// Mix final noise value
+				vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+				m = m * m;
+				return 42.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1), 
+				                            dot(p2,x2), dot(p3,x3) ) );
+			}
+			
+			/* ============================================ *
+			*              HERE ENDS THE NOISE              *
+			* ============================================= */
+			
+			// switch on high precision floats
+			#ifdef GL_ES
+			precision highp float;
+			#endif
+			
+			// uniforms
+			uniform float time;
+			uniform float planeWidth;
+			uniform float planeHeight;
+			uniform float seaDepth;
+			uniform float waterHue;
+			uniform float amplGain;
+			uniform float displacementScale;
+			
+			uniform int vertexFrequencies;
+			uniform int fragmentFrequencies;
+
+			uniform vec3 cameraPosWorldSpace;
+			
+			// varyings
+			varying vec3 interpolatedNormalWorldSpace;
+			varying vec4 fragWorldPos;
+			
+			float vertexDisplacement(vec3 worldPos)
+			{
+				vec3 timeVector = 0.3 * vec3(0.0, time, time) / 2.0;
+				float texScale = 0.0005;
+				float displacement = 0.0;
+				float noiseFreq = 4.0 - (-0.2 + seaDepth / 4.0);
+				float amplitude = 8.0 * (1.5 * amplGain) * (1.0 + 0.2 * seaDepth);
+				vec3 stretchVector = vec3(0.5, 1.0, 1.0);
+
+				for(int i = 0; i < 5; ++i)
+				{
+					if(i >= vertexFrequencies) break;
+	
+					// Perlin noise function calls, adding bias to return [0, 2]
+					displacement += amplitude * snoise(texScale * worldPos * stretchVector * noiseFreq + timeVector) + 1.0;
+					noiseFreq *= 4.0;
+					amplitude *= 0.2;
+					stretchVector += (0.125, 0.0, 0.0);
+				}
+
+				// return displacementScale * (1.0 - abs(displacement));
+				return displacementScale * displacement;
+			}
+			
+			void main()
+			{
+				float displacement = vertexDisplacement(position.xyz);
+				
+				// New, displaced position
+				vec3 displacedPosition = position.xyz + displacement * normal;
+				gl_Position = projectionMatrix * modelViewMatrix * vec4(displacedPosition, 1.0);
+				
+				/* ==== Approximating new normals ==== */
+				/* =================================== */		
+				
+				// Forward difference sample points
+				float h = 0.01;
+				vec3 forwardPointX = vec3(position.x + h, position.y, position.z);
+				vec3 forwardPointY = vec3(position.x, position.y + h, position.z);
+				
+				// X-axis
+				// Noise value at sample point
+				float forwardPointXDisp = vertexDisplacement(forwardPointX);
+				
+				// Displacement
+				vec3 forwardPointXDispPos = forwardPointX + forwardPointXDisp * normal;
+				
+				// Y-axis
+				// Noise value at sample point
+				float forwardPointYDisp = vertexDisplacement(forwardPointY);
+				
+				// Displacement
+				vec3 forwardPointYDispPos = forwardPointY + forwardPointYDisp * normal;
+				
+				// Difference vectors
+				vec3 diffVectorX = normalize(displacedPosition - forwardPointXDispPos);
+				vec3 diffVectorY = normalize(displacedPosition - forwardPointYDispPos);
+				
+				// New normal
+				vec3 newNormal = normalize(cross(diffVectorX, diffVectorY));
+
+				// Transformation of 'varyings'
+				interpolatedNormalWorldSpace = normalize(mat3(modelMatrix) * newNormal);
+				// interpolatedNormalViewSpace = normalize(mat3(modelViewMatrix) * newNormal);
+				
+				fragWorldPos = modelMatrix * vec4(displacedPosition, 1.0);
+			}
+			
+		</script>
+		
+		<script type="x-shader/x-fragment" id="fragmentshader">
+			//#extension GL_OES_standard_derivatives: enable
+			#ifdef GL_ES
+			precision highp float;
+			#endif
+			
+			/* ============================================ *
+			*              HERE COMES THE NOISE             *
+			* source: https://github.com/ashima/webgl-noise *
+			* ============================================= */
+
+			vec3 mod289(vec3 x) {
+				return x - floor(x * (1.0 / 289.0)) * 289.0;
+			}
+			vec4 mod289(vec4 x) {
+				return x - floor(x * (1.0 / 289.0)) * 289.0;
+			}
+			vec4 permute(vec4 x) {
+				return mod289(((x*34.0)+1.0)*x);
+			}
+			vec4 taylorInvSqrt(vec4 r)
+			{
+				return 1.79284291400159 - 0.85373472095314 * r;
+			}
+			float snoise(vec3 v)
+			{ 
+				const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
+				const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
+				// First corner
+				vec3 i  = floor(v + dot(v, C.yyy) );
+				vec3 x0 =   v - i + dot(i, C.xxx) ;
+				// Other corners
+				vec3 g = step(x0.yzx, x0.xyz);
+				vec3 l = 1.0 - g;
+				vec3 i1 = min( g.xyz, l.zxy );
+				vec3 i2 = max( g.xyz, l.zxy );
+				//   x0 = x0 - 0.0 + 0.0 * C.xxx;
+				//   x1 = x0 - i1  + 1.0 * C.xxx;
+				//   x2 = x0 - i2  + 2.0 * C.xxx;
+				//   x3 = x0 - 1.0 + 3.0 * C.xxx;
+				vec3 x1 = x0 - i1 + C.xxx;
+				vec3 x2 = x0 - i2 + C.yyy; // 2.0*C.x = 1/3 = C.y
+				vec3 x3 = x0 - D.yyy;      // -1.0+3.0*C.x = -0.5 = -D.y
+				// Permutations
+				i = mod289(i); 
+				vec4 p = permute( permute( permute( 
+				         i.z + vec4(0.0, i1.z, i2.z, 1.0 ))
+				       + i.y + vec4(0.0, i1.y, i2.y, 1.0 )) 
+				       + i.x + vec4(0.0, i1.x, i2.x, 1.0 ));
+				// Gradients: 7x7 points over a square, mapped onto an octahedron.
+				// The ring size 17*17 = 289 is close to a multiple of 49 (49*6 = 294)
+				float n_ = 0.142857142857; // 1.0/7.0
+				vec3  ns = n_ * D.wyz - D.xzx;
+				vec4 j = p - 49.0 * floor(p * ns.z * ns.z);  //  mod(p,7*7)
+				vec4 x_ = floor(j * ns.z);
+				vec4 y_ = floor(j - 7.0 * x_ );    // mod(j,N)
+				vec4 x = x_ *ns.x + ns.yyyy;
+				vec4 y = y_ *ns.x + ns.yyyy;
+				vec4 h = 1.0 - abs(x) - abs(y);
+				vec4 b0 = vec4( x.xy, y.xy );
+				vec4 b1 = vec4( x.zw, y.zw );
+				//vec4 s0 = vec4(lessThan(b0,0.0))*2.0 - 1.0;
+				//vec4 s1 = vec4(lessThan(b1,0.0))*2.0 - 1.0;
+				vec4 s0 = floor(b0)*2.0 + 1.0;
+				vec4 s1 = floor(b1)*2.0 + 1.0;
+				vec4 sh = -step(h, vec4(0.0));
+				vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy ;
+				vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww ;
+				vec3 p0 = vec3(a0.xy,h.x);
+				vec3 p1 = vec3(a0.zw,h.y);
+				vec3 p2 = vec3(a1.xy,h.z);
+				vec3 p3 = vec3(a1.zw,h.w);
+				//Normalise gradients
+				vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
+				p0 *= norm.x;
+				p1 *= norm.y;
+				p2 *= norm.z;
+				p3 *= norm.w;
+				// Mix final noise value
+				vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+				m = m * m;
+				return 42.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1), 
+				                            dot(p2,x2), dot(p3,x3) ) );
+			}
+			
+			/* ============================================ *
+			*              HERE ENDS THE NOISE              *
+			* ============================================= */
+
+			/* === hsl2rgb, https://github.com/Jam3/glsl-hsl2rgb/blob/master/index.glsl === */
+			/* ============================================================================ */
+			
+			float hue2rgb(float f1, float f2, float hue)
+			{
+			    if (hue < 0.0)
+			        hue += 1.0;
+			    else if (hue > 1.0)
+			        hue -= 1.0;
+			    float res;
+			    if ((6.0 * hue) < 1.0)
+			        res = f1 + (f2 - f1) * 6.0 * hue;
+			    else if ((2.0 * hue) < 1.0)
+			        res = f2;
+			    else if ((3.0 * hue) < 2.0)
+			        res = f1 + (f2 - f1) * ((2.0 / 3.0) - hue) * 6.0;
+			    else
+			        res = f1;
+			    return res;
+			}
+			
+			vec3 hsl2rgb(vec3 hsl)
+			{
+			    vec3 rgb;
+			    
+			    if (hsl.y == 0.0) {
+			        rgb = vec3(hsl.z); // Luminance
+			    } else {
+			        float f2;
+			        
+			        if (hsl.z < 0.5)
+			            f2 = hsl.z * (1.0 + hsl.y);
+			        else
+			            f2 = hsl.z + hsl.y - hsl.y * hsl.z;
+			            
+			        float f1 = 2.0 * hsl.z - f2;
+			        
+			        rgb.r = hue2rgb(f1, f2, hsl.x + (1.0/3.0));
+			        rgb.g = hue2rgb(f1, f2, hsl.x);
+			        rgb.b = hue2rgb(f1, f2, hsl.x - (1.0/3.0));
+			    }   
+			    return rgb;
+			}
+			
+			vec3 hsl2rgb(float h, float s, float l)
+			{
+			    return hsl2rgb(vec3(h, s, l));
+			}
+			
+			/* ================================= !hsl2rgb ================================= */
+			/* ============================================================================ */
+			
+			// uniforms
+			uniform float time;
+			uniform float seaDepth;
+			uniform float waterHue;
+			uniform float planeWidth;
+			uniform float planeHeight;
+			uniform float amplGain;
+			uniform float displacementScale;
+			
+			uniform int vertexFrequencies;
+			uniform int fragmentFrequencies;
+			
+			uniform vec3 cameraPosWorldSpace;
+
+			uniform sampler2D seabedTexture;
+			uniform samplerCube cubemap;
+
+			// varyings
+			varying vec4 fragWorldPos;
+			varying vec3 interpolatedNormalWorldSpace;
+			
+			float fragmentDisplacement(vec3 worldPos)
+			{
+				vec3 timeVector = 0.3 * vec3(0.0, time, time) / 2.0;
+				float texScale = 0.0005;
+				float displacement = 0.0;
+				float noiseFreq = 4.0 - (-0.2 + seaDepth / 4.0);
+				float amplitude = 8.0 * (1.5 * amplGain) * (1.0 + 0.2 * seaDepth);
+				vec3 stretchVector = vec3(0.5, 1.0, 1.0);
+
+				for(int i = 0; i < 5; ++i)
+				{
+					if(i >= vertexFrequencies) break;
+	
+					// Perlin noise function calls, adding bias to return [0, 2]
+					displacement += amplitude * snoise(texScale * worldPos * stretchVector * noiseFreq + timeVector) + 1.0;
+					noiseFreq *= 4.0;
+					amplitude *= 0.2;
+					stretchVector += (0.125, 0.0, 0.0);
+				}
+
+				return displacementScale * displacement;
+			}
+
+			vec3 computeNormalDisplacement(vec3 pos)
+			{
+				vec3 timeVector = vec3(0.0, time, time) / 2.0;
+				float texScale  = 0.0005;
+				float noiseFreq = 128.0;
+				float amplitude = 0.1;
+				vec3 stretchVector = vec3(0.5, 1.0, 1.0);
+
+				float h = 0.001;
+				float disp1 = 0.0;
+				float disp2 = 0.0;
+
+				for(int i = 0; i < 5; ++i)
+				{
+					if(i >= fragmentFrequencies) break;
+	
+					// Perlin noise function calls
+					disp1 += amplitude * snoise(texScale * (pos + vec3(h, 0.0, 0.0)) * stretchVector * noiseFreq + timeVector);
+					disp2 += amplitude * snoise(texScale * (pos + vec3(0.0, h, 0.0)) * stretchVector * noiseFreq + timeVector);
+
+					noiseFreq *= 3.0;
+					amplitude *= 0.6;
+					stretchVector += (0.125, 0.0, 0.0);
+				}
+
+				return vec3(disp1, disp2, 0.0) * 0.5;
+			}
+	
+			void main()
+			{
+				// Make normals "noisy" to introduce more shading detail at fragment level
+				vec3 normalDisp = computeNormalDisplacement(fragWorldPos.xyz);
+				vec3 newNormal = normalize(interpolatedNormalWorldSpace + normalDisp);
+
+				vec3 viewDirectionWorldSpace = normalize(fragWorldPos.xyz - cameraPosWorldSpace);
+				
+				/* == Reflection (sky) == *
+				*  ====================== */
+
+				// Compute reflection direction vector (Blinn-Phong)
+				vec3 reflectionDirWorldSpace = normalize(2.0 * newNormal * dot(newNormal, viewDirectionWorldSpace) - (viewDirectionWorldSpace));
+
+				// If the reflected direction 'points downward', flip its z-value to avoid sampling the cubemap in areas below the horizon
+				reflectionDirWorldSpace.z = (reflectionDirWorldSpace.z > 0.0) ? -reflectionDirWorldSpace.z: reflectionDirWorldSpace.z;
+
+				// Get normalized object coordinates
+				float px = fragWorldPos.x / planeWidth + 0.5;
+				float py = fragWorldPos.y / planeHeight + 0.5;
+				
+				// Compute 3D noise sampling position
+				float step = 1.0;
+				vec3 texCoord3D = vec3(px, py, 0.0) + reflectionDirWorldSpace * step;
+				
+				// HSL values
+				float saturation = 0.55;
+				float lightness = (snoise(texCoord3D) + 2.0) / 3.0;
+
+				// Sample cubemap
+			 	vec4 reflectionColor = textureCube(cubemap, reflectionDirWorldSpace);
+
+				/* == Refraction (seabed) == *
+				*  ========================= */
+				
+				// Compute refraction direction vector
+				vec3 refractionDirWorldSpace = refract(viewDirectionWorldSpace, newNormal, 0.75);
+				
+				// Compute angle between refraction and 'down' vector
+				float cos_alpha = dot(vec3(0.0, 0.0, -1.0), refractionDirWorldSpace);
+				float alpha = acos(cos_alpha);
+				
+				// Compute sampling offset
+				float offset_x = tan(alpha) * seaDepth * refractionDirWorldSpace.x;
+				float offset_y = tan(alpha) * seaDepth * refractionDirWorldSpace.y;
+				
+				// Compute distance traveled (hypothenuse)
+				float refractionDist = seaDepth / cos_alpha;
+				
+				// Compute new sampling position (uv coordinates)
+				float samplePos_x = px + offset_x;
+				float samplePos_y = py + offset_y;
+				
+				// Texture tiling/repeating
+				samplePos_x = (samplePos_x < 0.0) ? mod(samplePos_x + 1.0, 1.0) : mod(samplePos_x, 1.0);
+				samplePos_y = (samplePos_y < 0.0) ? mod(samplePos_y + 1.0, 1.0) : mod(samplePos_y, 1.0);
+				
+				// Create 2D uv coordinates
+				vec2 texCoord2D_seabed = vec2(samplePos_x, samplePos_y);
+				
+				// Sample seabed texture at these coordinates
+				float refractionAttenuation = pow(refractionDist, 2.0);
+				vec4 waterColor = vec4( hsl2rgb(waterHue, 1.0, 0.05), 1.0 );
+				vec4 refractionColor = texture2D(seabedTexture, texCoord2D_seabed) * (1.0 / refractionAttenuation);
+				refractionColor += waterColor * (1.0 - 1.0 / refractionAttenuation);
+
+				/* == Composite diffuse (sky), specular (sun) and reflection (sky texture) == *
+				*  ========================================================================== */
+				
+				// Compute angle between view direction and surface normal
+				cos_alpha = abs(dot(viewDirectionWorldSpace, newNormal));
+				
+				// Fresnel approximation
+				float k_refr = (0.25 + 0.5 * cos_alpha);
+				float k_refl = (0.25 + 0.5 * (1.0 - cos_alpha));
+
+				gl_FragColor = k_refr * refractionColor + k_refl * reflectionColor;
+			}
+		
+		</script>
+
+		<script type="x-shader/x-vertex" id="vertexshader-skybox">
+			varying vec4 fragWorldPos;
+			void main()
+			{
+				fragWorldPos = modelMatrix * vec4(position, 1.0);
+				gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+			}
+		</script>
+		
+		<script type="x-shader/x-fragment" id="fragmentshader-skybox">
+			
+			uniform samplerCube skybox;
+			uniform vec3 cameraPosWorldSpace;
+
+			varying vec4 fragWorldPos;
+
+			void main()
+			{	
+				vec3 viewDirectionWorldSpace = normalize(fragWorldPos.xyz - cameraPosWorldSpace);
+				vec3 sampleDir = -viewDirectionWorldSpace;
+				sampleDir.z = (sampleDir.z < 0.0) ? sampleDir.z : -sampleDir.z;
+				gl_FragColor = textureCube(skybox, sampleDir);
+			}
+		</script>
+		
+		<!-- End Shaders -->
+		
+		<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.5.1/jquery.min.js"></script>
+		<script src="js/three.min.js"></script>
+		<script src="js/controls/OrbitControls.js"></script>
+		<script src="js/controls/TrackballControls.js"></script>
+
+		<script src="js/Detector.js"></script>
+		<script src="js/libs/stats.min.js"></script>
+
+		<script>
+
+			if ( ! Detector.webgl ) Detector.addGetWebGLMessage();
+
+			var container;
+			var stats;
+			var start;
+			var pauseTime = 0.0;
+			var elapsedPauseTime = 0.0;
+			var animationIsPaused = false;
+			var camera, controls, scene, renderer;
+			var uniforms;
+			var sphere;
+			var plane_width  = 5000;
+			var plane_height = 5000;
+			var sea_depth = 1.0;
+			var sky_hue = 185.0 / 360.0;
+			var water_hue = 185.0 / 360.0;
+			var _displacementScale = 1.0;
+			var sky_height = 1.0;
+			var ampl_gain = 1.0;
+			var sky_tex;
+			var _vertexFrequencies = 3;
+			var _fragmentFrequencies = 3;
+			var skyBox;
+
+			document.addEventListener("keyup", function(event){ 
+				if(event.which == 32) {
+					if(!animationIsPaused) {
+						pauseTime = Date.now();
+					} else {
+						start += elapsedPauseTime;
+					}
+					animationIsPaused = !animationIsPaused;
+				}
+			}, false);
+
+			init();
+
+			function animate()
+			{
+				requestAnimationFrame(animate);
+				controls.update();
+
+				render();
+			}
+
+			function init()
+			{
+				start = Date.now();
+
+				// Camera
+				camera = new THREE.PerspectiveCamera( 65, window.innerWidth / window.innerHeight, 1, 100000 );
+				camera.position.set(0.0, 0.0, 1000);
+
+				// Scene
+				scene = new THREE.Scene();
+
+				// Textures
+				var seabed_tex = THREE.ImageUtils.loadTexture( "img/tex_seabed_01.png" );
+				seabed_tex.minFilter = THREE.LinearFilter;
+				var sky_cubemap = THREE.ImageUtils.loadTextureCube( [ "img/clouds_right.jpg", "img/clouds_left.jpg",
+                                                     				  "img/clouds_bottom.jpg", "img/clouds_top.jpg", 
+                                                     				  "img/clouds_back.jpg", "img/clouds_front.jpg" ] )
+
+				// Shader uniforms
+				uniforms = {
+					// floats
+				    time: 					{ type: "f", value: start},
+				    planeWidth: 			{ type: "f", value: plane_width},
+				    planeHeight: 			{ type: "f", value: plane_height},
+				    seaDepth: 				{ type: "f", value: sea_depth},
+				    waterHue: 				{ type: "f", value: water_hue},
+				    displacementScale: 		{ type: "f", value: _displacementScale},
+				    amplGain: 				{ type: "f", value: ampl_gain},
+				    // integers
+				    vertexFrequencies: 		{ type: "i", value: _vertexFrequencies},
+				    fragmentFrequencies: 	{ type: "i", value: _fragmentFrequencies},
+				    // vectors
+				    cameraPosWorldSpace: 	{ type: "v3", value: new THREE.Vector3(camera.position.x, camera.position.y, camera.position.z)},
+				    // Textures
+					seabedTexture : 		{ type: "t", value: seabed_tex },
+					cubemap : 				{ type: "t", value: sky_cubemap },
+				};
+
+				/* == Water surface == *
+				*  =================== */
+
+				// create water surface material
+				var shaderMaterial = new THREE.ShaderMaterial({
+					uniforms: uniforms,
+					vertexShader:   $('#vertexshader').text(),
+					fragmentShader: $('#fragmentshader').text(),
+					wireframe: false
+				});
+
+				// Create water surface mesh
+				var geometry = new THREE.PlaneGeometry( plane_width, plane_height, 256, 256);
+				var waterSurface = new THREE.Mesh( geometry, shaderMaterial );
+				waterSurface.position.x = 0.0;
+				waterSurface.position.y = 0.0;
+				waterSurface.position.z = 0.0;
+				waterSurface.updateMatrix();
+				waterSurface.matrixAutoUpdate = false;
+				scene.add( waterSurface );
+
+				/* == Skybox == *
+				*  ============ */
+
+				// skybox shader uniforms
+				uniforms_skybox = {
+					skybox : { type: "t", value: sky_cubemap },
+				    cameraPosWorldSpace: 	{ type: "v3", value: new THREE.Vector3(camera.position.x, camera.position.y, camera.position.z)},
+				};
+
+				// create skybox material
+				var skyboxMaterial = new THREE.ShaderMaterial({
+					uniforms: uniforms_skybox,
+					vertexShader: 	$('#vertexshader-skybox').text(),
+					fragmentShader: $('#fragmentshader-skybox').text(),
+					wireframe: false,
+					side: THREE.BackSide
+				});
+
+				// Create skybox mesh
+				geometry = new THREE.CubeGeometry( 50000, 50000, 50000 );
+				var skybox = new THREE.Mesh(geometry, skyboxMaterial);
+				skybox.updateMatrix();
+				skybox.matrixAutoUpdate = false;
+				scene.add( skybox );
+
+				// renderer
+				renderer = new THREE.WebGLRenderer( { antialias: false } );
+				renderer.setClearColor( 0x000000 );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+				container = document.getElementById( 'container' );
+				container.appendChild( renderer.domElement );
+
+				// Controls
+				controls = new THREE.TrackballControls( camera, renderer.domElement );
+				controls.rotateSpeed = 0.9;
+				controls.zoomSpeed = 0.5;
+				controls.panSpeed = 0.3;
+
+				stats = new Stats();
+				stats.domElement.style.position = 'absolute';
+				stats.domElement.style.top = '0px';
+				stats.domElement.style.zIndex = 100;
+				container.appendChild( stats.domElement );
+
+				window.addEventListener( 'resize', onWindowResize, false );
+
+				animate();
+			}
+
+			function onWindowResize()
+			{
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+				renderer.setSize( window.innerWidth, window.innerHeight );
+			}
+
+			function render()
+			{
+				uniforms.cameraPosWorldSpace.value = new THREE.Vector3(camera.position.x, camera.position.y, camera.position.z);
+				uniforms_skybox.cameraPosWorldSpace.value = new THREE.Vector3(camera.position.x, camera.position.y, camera.position.z);
+				uniforms.seaDepth.value = gui_content.depth;
+				uniforms.waterHue.value = gui_content.waterHue;
+				uniforms.displacementScale.value = gui_content.displacementScale;
+				uniforms.vertexFrequencies.value = gui_content.vertexFrequencies;
+				uniforms.fragmentFrequencies.value = gui_content.fragmentFrequencies;
+				
+				renderer.render( scene, camera );
+				
+				if(!animationIsPaused)
+				{
+					uniforms.time.value = 0.0025 * (Date.now() - start);
+				} else {
+					elapsedPauseTime = Date.now() - pauseTime;
+				}
+				stats.update();
+			}
+
+		</script>
+
+	</body>
+</html>
